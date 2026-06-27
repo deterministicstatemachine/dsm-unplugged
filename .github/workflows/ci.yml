@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core:
+    name: anchor-core (host test + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: test
+        run: cargo test -p dsm-anchor-core
+      - name: clippy
+        run: cargo clippy -p dsm-anchor-core --all-targets -- -D warnings
+
+  core-thumbv8m:
+    name: anchor-core (no_std cross build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv8m.main-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      - name: build core for RP2350 secure partition
+        run: cargo build -p dsm-anchor-core --target thumbv8m.main-none-eabihf
+
+  firmware:
+    name: firmware (RP2350 cross build)
+    runs-on: ubuntu-latest
+    steps:
+      # Lay the repo and libtropic-rs out as siblings so the firmware's
+      # `../../libtropic-rs/tropic01` path dependency resolves.
+      - uses: actions/checkout@v4
+        with:
+          path: dsm-unplugged
+      - uses: actions/checkout@v4
+        with:
+          repository: tropicsquare/libtropic-rs
+          path: libtropic-rs
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv8m.main-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dsm-unplugged
+      - name: build firmware (thumbv8m, config read from firmware/)
+        working-directory: dsm-unplugged/firmware
+        run: cargo build
