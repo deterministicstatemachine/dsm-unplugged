@@ -248,4 +248,11 @@ provisioned: pairing slot 0 holds `SH0_PROD0`):
 Dual-licensed under either [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT) at
 your option.
 
+The firmware links the pure-Rust [libtropic-rs] TROPIC01 driver, which is under
+The Clear BSD License (© Tropic Square s.r.o.). Its notice — required when
+distributing a built firmware binary — is reproduced in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), along with how to regenerate the
+full dependency-license set (`cargo about` / `cargo deny`). This repo does not
+vendor or link the C `libtropic` library.
+
 [libtropic-rs]: https://github.com/tropicsquare/libtropic-rs
