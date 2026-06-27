@@ -22,17 +22,17 @@ package dsm.anchor;
 
 // The DSM SMT root-advance package Δ (§8, Def. 14). It carries everything the
 // receiver needs to verify hᵢ → hᵢ₊₁ via ordinary DSM leaf proofs and to rebind
-// the witness. The anchor index uᵢ is committed by the parent root, so the only
-// valid successor index is uᵢ+1.
+// the witness. The anchor counter uᵢ is committed inside prev_root, so the only
+// valid successor counter is uᵢ+1.
 message TransitionPackage {
   bytes relationship_id       = 1;  // 32
   bytes object_id             = 2;  // 32
   bytes sender_device_id      = 3;  // 32
   bytes recipient_device_id   = 4;  // 32
-  bytes parent_root           = 5;  // 32  hᵢ
+  bytes prev_root             = 5;  // 32  hᵢ
   bytes next_root             = 6;  // 32  hᵢ₊₁
-  uint64 parent_index         = 7;  //     uᵢ
-  uint64 next_index           = 8;  //     uᵢ+1
+  uint64 anchor_counter       = 7;  //     uᵢ = H0 − H
+  uint64 next_anchor_counter  = 8;  //     uᵢ+1
   uint32 action_type          = 9;  // 0=Transfer 1=Resync 2=Cancel 3=Rotate
   bytes action_fields         = 10; // canonical action-specific encoding
   bytes payload_hash          = 11; // 32
@@ -44,10 +44,10 @@ message TransitionPackage {
 // The root advance certificate (§10, Def. 21):
 // Cert = (hᵢ,hᵢ₊₁,uᵢ,uᵢ+1,D,X,P_hw,pk_hw,σ,anchor_id,q,r_R).
 message RootAdvanceCertificate {
-  bytes parent_root        = 1;  // 32  hᵢ
+  bytes prev_root        = 1;  // 32  hᵢ
   bytes next_root          = 2;  // 32  hᵢ₊₁
-  uint64 parent_index      = 3;  //     uᵢ
-  uint64 next_index        = 4;  //     uᵢ+1
+  uint64 anchor_counter      = 3;  //     uᵢ
+  uint64 next_anchor_counter        = 4;  //     uᵢ+1
   bytes transition_digest  = 5;  // 32  D
   bytes witness_input      = 6;  // 32  X
   bytes pk_hash            = 7;  // 32  P_hw = H(tag‖pk_hw)

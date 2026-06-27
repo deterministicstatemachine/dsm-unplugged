@@ -178,7 +178,7 @@ impl<SPI: SpiDevice, CS: OutputPin> SecureCore<'_, SPI, CS> {
 /// predicate path. A real receiver supplies a verifier backed by the DSM state.
 struct TrivialDsm;
 impl DsmVerifier for TrivialDsm {
-    fn parent_commits_index(&self, _root: &[u8; 32], _index: u64) -> bool {
+    fn root_commits_counter(&self, _root: &[u8; 32], _index: u64) -> bool {
         true
     }
     fn verify_transition(&self, _t: &Transition) -> bool {
@@ -226,10 +226,10 @@ fn prepare_request() -> pb::ApplianceRequest {
             object_id: T_OBJ.to_vec(),
             sender_device_id: T_SND.to_vec(),
             recipient_device_id: T_RCV.to_vec(),
-            parent_root: GENESIS.to_vec(),
+            prev_root: GENESIS.to_vec(),
             next_root: NEXT_ROOT.to_vec(),
-            parent_index: 0,
-            next_index: 1,
+            anchor_counter: 0,
+            next_anchor_counter: 1,
             action_type: 0,
             action_fields: T_AF.to_vec(),
             payload_hash: T_PAY.to_vec(),
@@ -280,7 +280,7 @@ fn self_test<SPI: SpiDevice, CS: OutputPin>(
     let verify_ok = match relpb.as_ref().and_then(|r| r.to_release().ok()) {
         Some(rel) => {
             let ctx = VerifierContext {
-                accepted_parent_root: &GENESIS,
+                accepted_prev_root: &GENESIS,
                 pinned_anchor_id: &ANCHOR,
                 expected_receiver_challenge: &RCHAL,
                 expected_policy_hash: &POLICY,

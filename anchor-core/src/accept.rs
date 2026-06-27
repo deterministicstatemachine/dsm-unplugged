@@ -18,9 +18,9 @@ use crate::util::ct_eq_32;
 /// The DSM-state verifier the receiver supplies. These are the checks anchor-core
 /// cannot perform without the DSM SMT and relationship state.
 pub trait DsmVerifier {
-    /// Check 3: the parent DSM state at `parent_root` commits to `parent_index`.
-    fn parent_commits_index(&self, parent_root: &[u8; 32], parent_index: u64) -> bool;
-    /// Check 7: the DSM transition proof verifies `parent_root → next_root`
+    /// Check 3: the parent DSM state at `prev_root` commits to `anchor_counter`.
+    fn root_commits_counter(&self, prev_root: &[u8; 32], anchor_counter: u64) -> bool;
+    /// Check 7: the DSM transition proof verifies `prev_root → next_root`
     /// (via the package's `old_leaf_proof` / `new_leaf_proof`).
     fn verify_transition(&self, t: &Transition) -> bool;
     /// Check 8: the transfer delivers the claimed object/value to this receiver.
@@ -45,7 +45,7 @@ pub trait CounterVerifier {
 /// transfer, plus the policy gates (checks 2, 5, 9, 15, 16).
 pub struct VerifierContext<'a> {
     /// Check 2: the parent root this receiver accepts for the received object.
-    pub accepted_parent_root: &'a [u8; 32],
+    pub accepted_prev_root: &'a [u8; 32],
     /// The enrolled anchor identity this receiver pinned (Track 1c).
     pub pinned_anchor_id: &'a [u8; 32],
     /// Check 5: the receiver challenge `r_R` this receiver supplied.
@@ -54,7 +54,7 @@ pub struct VerifierContext<'a> {
     pub expected_policy_hash: &'a [u8; 32],
     /// Enrolled counter `H0` for the pinned anchor.
     pub enrolled_counter: u64,
-    /// Check 15: the maximum offline-exposure index; `next_index` must not exceed it.
+    /// Check 15: the maximum offline-exposure index; `next_anchor_counter` must not exceed it.
     pub exposure_cap_index: u64,
     /// Check 16: `true` iff no known firmware-boundary or physical-compromise
     /// event invalidates the anchor.
@@ -67,10 +67,10 @@ pub enum AcceptError {
     /// (1) Δ and Cert disagree on the advance they describe.
     NonCanonical,
     /// (2) Parent root is not the receiver's accepted parent / anchor not pinned.
-    ParentNotAccepted,
-    /// (3) Parent DSM state does not commit to `parent_index`.
-    ParentIndexUncommitted,
-    /// (4) `next_index != parent_index + 1`.
+    PrevRootNotAccepted,
+    /// (3) Parent DSM state does not commit to `anchor_counter`.
+    AnchorCounterUncommitted,
+    /// (4) `next_anchor_counter != anchor_counter + 1`.
     BadNextIndex,
     /// (5) Receiver challenge is not the one this receiver supplied.
     ChallengeMismatch,
@@ -118,28 +118,28 @@ where
     // recomputed from these structured values below (D, X, M), so protobuf
     // non-minimality is replay-equivalent (Thm 28), not a forgery surface. This
     // guard rejects a Cert spliced onto a different Δ.
-    if !ct_eq_32(&cert.parent_root, t.parent_root)
+    if !ct_eq_32(&cert.prev_root, t.prev_root)
         || !ct_eq_32(&cert.next_root, t.next_root)
-        || cert.parent_index != t.parent_index
-        || cert.next_index != t.next_index
+        || cert.anchor_counter != t.anchor_counter
+        || cert.next_anchor_counter != t.next_anchor_counter
     {
         return Err(AcceptError::NonCanonical);
     }
 
     // (2) hᵢ is the receiver's accepted parent root, and the anchor is pinned.
-    if !ct_eq_32(t.parent_root, ctx.accepted_parent_root)
+    if !ct_eq_32(t.prev_root, ctx.accepted_prev_root)
         || !ct_eq_32(&cert.anchor_id, ctx.pinned_anchor_id)
     {
-        return Err(AcceptError::ParentNotAccepted);
+        return Err(AcceptError::PrevRootNotAccepted);
     }
 
     // (3) Parent DSM state commits to uᵢ.
-    if !dsm.parent_commits_index(t.parent_root, t.parent_index) {
-        return Err(AcceptError::ParentIndexUncommitted);
+    if !dsm.root_commits_counter(t.prev_root, t.anchor_counter) {
+        return Err(AcceptError::AnchorCounterUncommitted);
     }
 
-    // (4) next index = uᵢ + 1 (checked: parent_index is attacker-supplied).
-    if t.parent_index.checked_add(1) != Some(t.next_index) {
+    // (4) next index = uᵢ + 1 (checked: anchor_counter is attacker-supplied).
+    if t.anchor_counter.checked_add(1) != Some(t.next_anchor_counter) {
         return Err(AcceptError::BadNextIndex);
     }
 
@@ -201,7 +201,7 @@ where
     // itself from the chip (the transcript), never the host-supplied number.
     let expects_live = ctx
         .enrolled_counter
-        .checked_sub(t.next_index)
+        .checked_sub(t.next_anchor_counter)
         .ok_or(AcceptError::CounterEvidenceInvalid)?;
     let attested = counter
         .read_authentic_counter(ctx.pinned_anchor_id, ev)
@@ -211,7 +211,7 @@ where
     }
 
     // (15) Within the offline exposure cap.
-    if t.next_index > ctx.exposure_cap_index {
+    if t.next_anchor_counter > ctx.exposure_cap_index {
         return Err(AcceptError::ExposureCapExceeded);
     }
 

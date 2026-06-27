@@ -52,16 +52,16 @@ fn app(h: u32) -> Appliance<MockTropic, WotsBlake3> {
     Appliance::new(MockTropic::with_h(h), H0, ROOT0, ANCHOR, SLOT)
 }
 
-fn make_transition(parent_root: [u8; 32], next_root: [u8; 32], parent_index: u64) -> OwnedTransition {
+fn make_transition(prev_root: [u8; 32], next_root: [u8; 32], anchor_counter: u64) -> OwnedTransition {
     OwnedTransition {
         relationship_id: [1; 32],
         object_id: [2; 32],
         sender_device_id: [3; 32],
         recipient_device_id: RECIP,
-        parent_root,
+        prev_root,
         next_root,
-        parent_index,
-        next_index: parent_index + 1,
+        anchor_counter,
+        next_anchor_counter: anchor_counter + 1,
         action_type: 0,
         action_fields: vec![9, 9, 9],
         payload_hash: [6; 32],
@@ -82,7 +82,7 @@ fn valid_release() -> OfflineRelease {
 
 fn ctx() -> VerifierContext<'static> {
     VerifierContext {
-        accepted_parent_root: &ROOT0,
+        accepted_prev_root: &ROOT0,
         pinned_anchor_id: &ANCHOR,
         expected_receiver_challenge: &RCHAL,
         expected_policy_hash: &POLICY,
@@ -94,7 +94,7 @@ fn ctx() -> VerifierContext<'static> {
 
 struct OkDsm;
 impl DsmVerifier for OkDsm {
-    fn parent_commits_index(&self, _r: &[u8; 32], _i: u64) -> bool {
+    fn root_commits_counter(&self, _r: &[u8; 32], _i: u64) -> bool {
         true
     }
     fn verify_transition(&self, _t: &Transition) -> bool {
@@ -136,7 +136,7 @@ fn full_lifecycle_prepare_commit_emit_finalize() {
 
     let rel = a.emit().unwrap().clone();
     assert_eq!(rel.cert.next_root, ROOT1);
-    assert_eq!(rel.cert.next_index, 1);
+    assert_eq!(rel.cert.next_anchor_counter, 1);
 
     let h_next = a.finalize().unwrap();
     assert_eq!(h_next, ROOT1);
@@ -188,11 +188,11 @@ fn prepare_rejects_wrong_parent_and_bad_index() {
     let bad_parent = make_transition([0xEE; 32], ROOT1, 0);
     assert_eq!(
         a.prepare(&bad_parent.as_transition(), &RCHAL),
-        Err(ApplianceError::ParentMismatch)
+        Err(ApplianceError::PrevRootMismatch)
     );
-    // parent_index 0 ok, but force next_index != parent_index + 1.
+    // anchor_counter 0 ok, but force next_anchor_counter != anchor_counter + 1.
     let mut skip = make_transition(ROOT0, ROOT1, 0);
-    skip.next_index = 5;
+    skip.next_anchor_counter = 5;
     assert_eq!(a.prepare(&skip.as_transition(), &RCHAL), Err(ApplianceError::IndexMismatch));
 }
 
@@ -232,7 +232,7 @@ fn accept_valid_release() {
 #[test]
 fn accept_rejects_noncanonical_cert_disagreement() {
     let mut rel = valid_release();
-    rel.cert.next_index += 1; // cert disagrees with Δ
+    rel.cert.next_anchor_counter += 1; // cert disagrees with Δ
     assert_eq!(check(&rel, &ctx()), Err(AcceptError::NonCanonical));
 }
 
@@ -241,11 +241,11 @@ fn accept_rejects_unaccepted_parent_and_unpinned_anchor() {
     let rel = valid_release();
     let other = [0xFE; 32];
     let mut c = ctx();
-    c.accepted_parent_root = &other;
-    assert_eq!(check(&rel, &c), Err(AcceptError::ParentNotAccepted));
+    c.accepted_prev_root = &other;
+    assert_eq!(check(&rel, &c), Err(AcceptError::PrevRootNotAccepted));
     let mut c = ctx();
     c.pinned_anchor_id = &other;
-    assert_eq!(check(&rel, &c), Err(AcceptError::ParentNotAccepted));
+    assert_eq!(check(&rel, &c), Err(AcceptError::PrevRootNotAccepted));
 }
 
 #[test]
@@ -283,7 +283,7 @@ fn accept_rejects_tampered_digest_input_pkhash_and_sig() {
 fn accept_rejects_dsm_proof_failures() {
     struct FailParent;
     impl DsmVerifier for FailParent {
-        fn parent_commits_index(&self, _: &[u8; 32], _: u64) -> bool {
+        fn root_commits_counter(&self, _: &[u8; 32], _: u64) -> bool {
             false
         }
         fn verify_transition(&self, _: &Transition) -> bool {
@@ -295,7 +295,7 @@ fn accept_rejects_dsm_proof_failures() {
     }
     struct FailTransition;
     impl DsmVerifier for FailTransition {
-        fn parent_commits_index(&self, _: &[u8; 32], _: u64) -> bool {
+        fn root_commits_counter(&self, _: &[u8; 32], _: u64) -> bool {
             true
         }
         fn verify_transition(&self, _: &Transition) -> bool {
@@ -307,7 +307,7 @@ fn accept_rejects_dsm_proof_failures() {
     }
     struct FailDeliver;
     impl DsmVerifier for FailDeliver {
-        fn parent_commits_index(&self, _: &[u8; 32], _: u64) -> bool {
+        fn root_commits_counter(&self, _: &[u8; 32], _: u64) -> bool {
             true
         }
         fn verify_transition(&self, _: &Transition) -> bool {
@@ -321,7 +321,7 @@ fn accept_rejects_dsm_proof_failures() {
     let c = ctx();
     assert_eq!(
         accept_offline::<WotsBlake3, _, _>(&rel, &c, &FailParent, &OkCounter),
-        Err(AcceptError::ParentIndexUncommitted)
+        Err(AcceptError::AnchorCounterUncommitted)
     );
     assert_eq!(
         accept_offline::<WotsBlake3, _, _>(&rel, &c, &FailTransition, &OkCounter),
@@ -336,7 +336,7 @@ fn accept_rejects_dsm_proof_failures() {
 #[test]
 fn accept_rejects_counter_evidence_problems() {
     // A transcript attesting the wrong value (claim is consistent but the chip
-    // read disagrees with H0 - next_index).
+    // read disagrees with H0 - next_anchor_counter).
     let mut rel = valid_release();
     rel.counter.live_counter_claim += 1;
     assert_eq!(check(&rel, &ctx()), Err(AcceptError::CounterEvidenceInvalid));
@@ -359,7 +359,7 @@ fn accept_rejects_counter_evidence_problems() {
     struct LyingChip;
     impl CounterVerifier for LyingChip {
         fn read_authentic_counter(&self, _: &[u8; 32], _: &CounterEvidence) -> Option<u64> {
-            Some(42) // the real chip value, != H0 - next_index
+            Some(42) // the real chip value, != H0 - next_anchor_counter
         }
     }
     let rel = valid_release(); // ships live_counter == expected (99)
@@ -373,7 +373,7 @@ fn accept_rejects_counter_evidence_problems() {
 fn accept_rejects_exposure_cap_and_compromise() {
     let rel = valid_release();
     let mut c = ctx();
-    c.exposure_cap_index = 0; // next_index 1 exceeds the cap
+    c.exposure_cap_index = 0; // next_anchor_counter 1 exceeds the cap
     assert_eq!(check(&rel, &c), Err(AcceptError::ExposureCapExceeded));
 
     let mut c = ctx();
@@ -446,17 +446,17 @@ fn recover_ready_stale_downgrades_and_ahead_fails_closed() {
 #[test]
 fn recover_completes_durable_release_before_counter_commit() {
     // §14.3: committed candidate written, counter NOT yet moved (still 100,
-    // live_u = 0), record.next_index = 1 = live_u + 1 -> recovery moves the
+    // live_u = 0), record.next_anchor_counter = 1 = live_u + 1 -> recovery moves the
     // counter once, then re-emits + finalizes the same successor.
     let mut a = app(H0);
     let rel = valid_release();
     a.active.status = Status::Committed;
     a.active.u = 0;
     a.active.record = Record::Committed(Box::new(CommittedRecord {
-        parent_root: ROOT0,
+        prev_root: ROOT0,
         next_root: ROOT1,
-        parent_index: 0,
-        next_index: 1,
+        anchor_counter: 0,
+        next_anchor_counter: 1,
         release: rel,
         committed: false,
     }));
@@ -470,17 +470,17 @@ fn recover_completes_durable_release_before_counter_commit() {
 #[test]
 fn recover_marks_committed_when_counter_moved_but_flag_lost() {
     // §14.4 corner: counter already moved (h = 99, live_u = 1) but committed flag
-    // not persisted; record.next_index = 1 = live_u -> mark committed, re-emit,
+    // not persisted; record.next_anchor_counter = 1 = live_u -> mark committed, re-emit,
     // counter must NOT move again.
     let mut a = Appliance::<MockTropic, WotsBlake3>::new(MockTropic::with_h(99), H0, ROOT0, ANCHOR, SLOT);
     let rel = valid_release();
     a.active.status = Status::Committed;
     a.active.u = 0;
     a.active.record = Record::Committed(Box::new(CommittedRecord {
-        parent_root: ROOT0,
+        prev_root: ROOT0,
         next_root: ROOT1,
-        parent_index: 0,
-        next_index: 1,
+        anchor_counter: 0,
+        next_anchor_counter: 1,
         release: rel,
         committed: false,
     }));
@@ -493,17 +493,17 @@ fn recover_marks_committed_when_counter_moved_but_flag_lost() {
 #[test]
 fn recover_downgrades_when_parent_diverged() {
     // §14.3 guard (#8): durable candidate, counter not moved, but active.root no
-    // longer matches the record's parent_root -> do not burn a counter step.
+    // longer matches the record's prev_root -> do not burn a counter step.
     let mut a = app(H0);
     let rel = valid_release();
     a.active.root = [0x9E; 32]; // diverged (e.g. an intervening online advance)
     a.active.status = Status::Committed;
     a.active.u = 0;
     a.active.record = Record::Committed(Box::new(CommittedRecord {
-        parent_root: ROOT0,
+        prev_root: ROOT0,
         next_root: ROOT1,
-        parent_index: 0,
-        next_index: 1,
+        anchor_counter: 0,
+        next_anchor_counter: 1,
         release: rel,
         committed: false,
     }));
@@ -531,9 +531,9 @@ fn proto_request_roundtrip() {
     let back = decode_request(&encode_request(&req)).unwrap();
     assert_eq!(back.op, pb::Op::Prepare as i32);
     let owned = back.transition.unwrap().to_owned_transition().unwrap();
-    assert_eq!(owned.parent_root, ROOT0);
+    assert_eq!(owned.prev_root, ROOT0);
     assert_eq!(owned.next_root, ROOT1);
-    assert_eq!(owned.next_index, 1);
+    assert_eq!(owned.next_anchor_counter, 1);
     assert_eq!(back.receiver_challenge, RCHAL.to_vec());
 }
 

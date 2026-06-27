@@ -25,14 +25,15 @@ pub struct Transition<'a> {
     pub object_id: &'a [u8; 32],
     pub sender_device_id: &'a [u8; 32],
     pub recipient_device_id: &'a [u8; 32],
-    /// Parent SMT root `hᵢ`.
-    pub parent_root: &'a [u8; 32],
+    /// The DSM SMT root `hᵢ` this advance starts from.
+    pub prev_root: &'a [u8; 32],
     /// Proposed successor SMT root `hᵢ₊₁`.
     pub next_root: &'a [u8; 32],
-    /// Anchor index `uᵢ` committed by the parent state.
-    pub parent_index: u64,
-    /// Next index `uᵢ+1`.
-    pub next_index: u64,
+    /// Anchor counter `uᵢ = H₀ − H` — the TROPIC01 down-counter index, a plain
+    /// integer committed *as a field inside* `prev_root` (not a tree position).
+    pub anchor_counter: u64,
+    /// Successor anchor counter `uᵢ+1` committed inside `next_root`.
+    pub next_anchor_counter: u64,
     pub action_type: u32,
     pub action_fields: &'a [u8],
     pub payload_hash: &'a [u8; 32],
@@ -51,10 +52,10 @@ pub fn enc_transition(t: &Transition) -> Vec<u8> {
     v.extend_from_slice(t.object_id);
     v.extend_from_slice(t.sender_device_id);
     v.extend_from_slice(t.recipient_device_id);
-    v.extend_from_slice(t.parent_root);
+    v.extend_from_slice(t.prev_root);
     v.extend_from_slice(t.next_root);
-    v.extend_from_slice(&u64_le(t.parent_index));
-    v.extend_from_slice(&u64_le(t.next_index));
+    v.extend_from_slice(&u64_le(t.anchor_counter));
+    v.extend_from_slice(&u64_le(t.next_anchor_counter));
     v.extend_from_slice(&u32_le(t.action_type));
     push_var(&mut v, t.action_fields);
     v.extend_from_slice(t.payload_hash);
@@ -80,10 +81,10 @@ pub fn witness_input(
     h(
         domain::ROOT_ADVANCE_INPUT_V1,
         &[
-            t.parent_root,
+            t.prev_root,
             t.next_root,
-            &u64_le(t.parent_index),
-            &u64_le(t.next_index),
+            &u64_le(t.anchor_counter),
+            &u64_le(t.next_anchor_counter),
             d,
             t.recipient_device_id,
             t.object_id,
@@ -109,10 +110,10 @@ pub fn witness_key_material(
         domain::ROOT_ADVANCE_WITNESS_KEY_V1,
         &[
             x,
-            t.parent_root,
+            t.prev_root,
             t.next_root,
-            &u64_le(t.parent_index),
-            &u64_le(t.next_index),
+            &u64_le(t.anchor_counter),
+            &u64_le(t.next_anchor_counter),
             anchor_id,
             &u16_le(q),
             t.authority_policy_hash,
@@ -139,10 +140,10 @@ pub fn cert_message(
     h(
         domain::CERT_MESSAGE_V1,
         &[
-            t.parent_root,
+            t.prev_root,
             t.next_root,
-            &u64_le(t.parent_index),
-            &u64_le(t.next_index),
+            &u64_le(t.anchor_counter),
+            &u64_le(t.next_anchor_counter),
             d,
             x,
             p_hw,
@@ -164,10 +165,10 @@ pub struct OwnedTransition {
     pub object_id: [u8; 32],
     pub sender_device_id: [u8; 32],
     pub recipient_device_id: [u8; 32],
-    pub parent_root: [u8; 32],
+    pub prev_root: [u8; 32],
     pub next_root: [u8; 32],
-    pub parent_index: u64,
-    pub next_index: u64,
+    pub anchor_counter: u64,
+    pub next_anchor_counter: u64,
     pub action_type: u32,
     pub action_fields: Vec<u8>,
     pub payload_hash: [u8; 32],
@@ -183,10 +184,10 @@ impl OwnedTransition {
             object_id: *t.object_id,
             sender_device_id: *t.sender_device_id,
             recipient_device_id: *t.recipient_device_id,
-            parent_root: *t.parent_root,
+            prev_root: *t.prev_root,
             next_root: *t.next_root,
-            parent_index: t.parent_index,
-            next_index: t.next_index,
+            anchor_counter: t.anchor_counter,
+            next_anchor_counter: t.next_anchor_counter,
             action_type: t.action_type,
             action_fields: t.action_fields.to_vec(),
             payload_hash: *t.payload_hash,
@@ -202,10 +203,10 @@ impl OwnedTransition {
             object_id: &self.object_id,
             sender_device_id: &self.sender_device_id,
             recipient_device_id: &self.recipient_device_id,
-            parent_root: &self.parent_root,
+            prev_root: &self.prev_root,
             next_root: &self.next_root,
-            parent_index: self.parent_index,
-            next_index: self.next_index,
+            anchor_counter: self.anchor_counter,
+            next_anchor_counter: self.next_anchor_counter,
             action_type: self.action_type,
             action_fields: &self.action_fields,
             payload_hash: &self.payload_hash,
@@ -219,10 +220,10 @@ impl OwnedTransition {
 /// The root advance certificate `Cert` (Def. 21 / wire `RootAdvanceCertificate`).
 #[derive(Clone)]
 pub struct Certificate {
-    pub parent_root: [u8; 32],
+    pub prev_root: [u8; 32],
     pub next_root: [u8; 32],
-    pub parent_index: u64,
-    pub next_index: u64,
+    pub anchor_counter: u64,
+    pub next_anchor_counter: u64,
     pub transition_digest: [u8; 32],
     pub witness_input: [u8; 32],
     pub pk_hash: [u8; 32],

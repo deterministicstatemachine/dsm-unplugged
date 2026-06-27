@@ -15,7 +15,7 @@ use crate::tropic::{Tropic, WitnessSig};
 pub mod err {
     pub const NONE: u32 = 0;
     pub const WRONG_STATE: u32 = 1;
-    pub const PARENT_MISMATCH: u32 = 2;
+    pub const PREV_ROOT_MISMATCH: u32 = 2;
     pub const INDEX_MISMATCH: u32 = 3;
     pub const COUNTER_MISMATCH: u32 = 4;
     pub const WITNESS_KEY_LOST: u32 = 5;
@@ -38,7 +38,7 @@ pub const MAX_FRAME_LEN: usize = 64 * 1024;
 fn appliance_code(e: ApplianceError) -> u32 {
     match e {
         ApplianceError::WrongState => err::WRONG_STATE,
-        ApplianceError::ParentMismatch => err::PARENT_MISMATCH,
+        ApplianceError::PrevRootMismatch => err::PREV_ROOT_MISMATCH,
         ApplianceError::IndexMismatch => err::INDEX_MISMATCH,
         ApplianceError::CounterMismatch => err::COUNTER_MISMATCH,
         ApplianceError::WitnessKeyLost => err::WITNESS_KEY_LOST,

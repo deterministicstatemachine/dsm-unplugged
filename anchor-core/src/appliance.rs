@@ -48,8 +48,8 @@ pub enum ApplianceError {
     /// Operation not valid in the current status.
     WrongState,
     /// Requested parent root is not the active root.
-    ParentMismatch,
-    /// `next_index != parent_index + 1`, or `parent_index != active.u`.
+    PrevRootMismatch,
+    /// `next_anchor_counter != anchor_counter + 1`, or `anchor_counter != active.u`.
     IndexMismatch,
     /// `active.u != H₀ − H` — the appliance is not offline-ready.
     CounterMismatch,
@@ -89,10 +89,10 @@ impl Drop for PreparedRecord {
 
 /// Committed record (§11.2): the signed release + the counter-committed flag.
 pub struct CommittedRecord {
-    pub parent_root: [u8; 32],
+    pub prev_root: [u8; 32],
     pub next_root: [u8; 32],
-    pub parent_index: u64,
-    pub next_index: u64,
+    pub anchor_counter: u64,
+    pub next_anchor_counter: u64,
     pub release: OfflineRelease,
     pub committed: bool,
 }
@@ -175,13 +175,13 @@ impl<T: Tropic, S: WitnessSig> Appliance<T, S> {
         if self.active.status != Status::Ready {
             return Err(ApplianceError::WrongState);
         }
-        if !ct_eq_32(&self.active.root, t.parent_root) {
-            return Err(ApplianceError::ParentMismatch);
+        if !ct_eq_32(&self.active.root, t.prev_root) {
+            return Err(ApplianceError::PrevRootMismatch);
         }
-        if t.parent_index != self.active.u {
+        if t.anchor_counter != self.active.u {
             return Err(ApplianceError::IndexMismatch);
         }
-        if t.next_index != t.parent_index + 1 {
+        if t.next_anchor_counter != t.anchor_counter + 1 {
             return Err(ApplianceError::IndexMismatch);
         }
         let live_u = self.live_index()?;
@@ -235,28 +235,28 @@ impl<T: Tropic, S: WitnessSig> Appliance<T, S> {
             return Err(ApplianceError::WitnessKeyLost);
         }
         let t = p.txn.as_transition();
-        if !ct_eq_32(&p.txn.parent_root, &self.active.root) {
-            return Err(ApplianceError::ParentMismatch);
+        if !ct_eq_32(&p.txn.prev_root, &self.active.root) {
+            return Err(ApplianceError::PrevRootMismatch);
         }
 
         // The counter must be movable AND still pinned to this transfer's parent
         // index — the RP2350 may have moved it out of band since prepare. The
-        // counter counts down, so `live_u = H0 − H` must equal `parent_index`.
+        // counter counts down, so `live_u = H0 − H` must equal `anchor_counter`.
         let h = self.tropic.counter_get().map_err(ApplianceError::Tropic)?;
         if h == 0 {
             return Err(ApplianceError::CounterExhausted);
         }
         let live_u = self.h0.checked_sub(h).ok_or(ApplianceError::CounterMismatch)? as u64;
-        if live_u != p.txn.parent_index {
+        if live_u != p.txn.anchor_counter {
             return Err(ApplianceError::CounterMismatch);
         }
 
         let sigma = S::sign(&p.sk_hw, &p.cert_message);
         let cert = Certificate {
-            parent_root: p.txn.parent_root,
+            prev_root: p.txn.prev_root,
             next_root: p.txn.next_root,
-            parent_index: p.txn.parent_index,
-            next_index: p.txn.next_index,
+            anchor_counter: p.txn.anchor_counter,
+            next_anchor_counter: p.txn.next_anchor_counter,
             transition_digest: p.digest,
             witness_input: p.witness_input,
             pk_hash: p.p_hw,
@@ -266,10 +266,10 @@ impl<T: Tropic, S: WitnessSig> Appliance<T, S> {
             slot: self.slot,
             receiver_challenge: p.receiver_challenge,
         };
-        let next_index = p.txn.next_index;
-        let parent_root = p.txn.parent_root;
+        let next_anchor_counter = p.txn.next_anchor_counter;
+        let prev_root = p.txn.prev_root;
         let next_root = p.txn.next_root;
-        let parent_index = p.txn.parent_index;
+        let anchor_counter = p.txn.anchor_counter;
         let release = OfflineRelease {
             transition: OwnedTransition::from(&t),
             cert,
@@ -281,7 +281,7 @@ impl<T: Tropic, S: WitnessSig> Appliance<T, S> {
                 anchor_id: self.anchor_id,
                 enrolled_counter: self.h0 as u64,
                 live_counter_claim: (h - 1) as u64,
-                derived_index_claim: next_index,
+                derived_index_claim: next_anchor_counter,
                 verifier_transcript: Vec::new(),
             },
         };
@@ -292,10 +292,10 @@ impl<T: Tropic, S: WitnessSig> Appliance<T, S> {
         }
         self.active.status = Status::Committed;
         self.active.record = Record::Committed(Box::new(CommittedRecord {
-            parent_root,
+            prev_root,
             next_root,
-            parent_index,
-            next_index,
+            anchor_counter,
+            next_anchor_counter,
             release,
             committed: false,
         }));
@@ -310,7 +310,7 @@ impl<T: Tropic, S: WitnessSig> Appliance<T, S> {
         if let Record::Committed(c) = &mut self.active.record {
             c.committed = true;
         }
-        self.active.u = next_index;
+        self.active.u = next_anchor_counter;
         Ok(())
     }
 
@@ -373,8 +373,8 @@ impl<T: Tropic, S: WitnessSig> Appliance<T, S> {
 
         match self.active.status {
             Status::Committed => {
-                let (committed, rec_u, next_root, parent_root) = match &self.active.record {
-                    Record::Committed(c) => (c.committed, c.next_index, c.next_root, c.parent_root),
+                let (committed, rec_u, next_root, prev_root) = match &self.active.record {
+                    Record::Committed(c) => (c.committed, c.next_anchor_counter, c.next_root, c.prev_root),
                     _ => return RecoverOutcome::DowngradeOnline,
                 };
                 if committed {
@@ -389,7 +389,7 @@ impl<T: Tropic, S: WitnessSig> Appliance<T, S> {
                     // §14.3: durable release, counter not yet moved. Complete the
                     // counter commit only if the parent/policy still matches the
                     // active root (the SMT root commits authority_policy_hash).
-                    if !ct_eq_32(&parent_root, &self.active.root) {
+                    if !ct_eq_32(&prev_root, &self.active.root) {
                         return RecoverOutcome::DowngradeOnline;
                     }
                     if self.tropic.counter_update().is_err() {
@@ -422,7 +422,7 @@ impl<T: Tropic, S: WitnessSig> Appliance<T, S> {
                 // root (no intervening online advance) before it may complete.
                 let parent_ok = matches!(
                     &self.active.record,
-                    Record::Prepared(p) if ct_eq_32(&p.txn.parent_root, &self.active.root)
+                    Record::Prepared(p) if ct_eq_32(&p.txn.prev_root, &self.active.root)
                 );
                 if !parent_ok {
                     return RecoverOutcome::DowngradeOnline;
