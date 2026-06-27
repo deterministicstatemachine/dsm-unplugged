@@ -1,0 +1,52 @@
+[package]
+name = "dsm-anchor-firmware"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "RP2350 (Pico 2 W) DSM offline-bearer anchor firmware: TROPIC01 via the official libtropic-rs (tropic01) embedded-hal driver. T1 = chip-id bringup, T2 = encrypted L3 session."
+
+[[bin]]
+name = "dsm-anchor-firmware"
+test = false
+bench = false
+
+[dependencies]
+# The hardware-free protocol core: Tropic/WitnessSig traits, the witness flow,
+# the WOTS-over-BLAKE3 signature, the lifecycle Appliance, and the Def-52 verifier.
+dsm-anchor-core = { path = "../anchor-core" }
+# Heap allocator: the witness flow / release package allocate (Vec sk_hw/pk_hw/σ/Q).
+embedded-alloc = "0.6"
+
+# Official Tropic Square Rust driver (no_std, embedded-hal). Has mac_and_destroy,
+# mcounter_*, r_mem_*, session_start, get_info_chip_id. default features =
+# ["keys", "x25519-dalek"] give the engineering-sample pairing keys + the
+# X25519Dalek handshake impl needed for the encrypted L3 session (T2+).
+tropic01 = { path = "../../libtropic-rs/tropic01" }
+
+# Same x25519-dalek major as libtropic-rs (v2) so X::PublicKey / X::StaticSecret
+# unify — lets the firmware name the key types passed to session_start.
+x25519-dalek = { version = "2", default-features = false, features = [
+    "static_secrets",
+    "zeroize",
+] }
+
+# --- RP2350 / Pico 2 W ---
+rp235x-hal = { version = "0.3", features = ["binary-info", "critical-section-impl", "rt"] }
+panic-halt = "1.0"
+
+# --- USB CDC bringup logs ---
+usb-device = "0.3"
+usbd-serial = "0.2"
+
+# --- embedded-hal 1.0 + SpiDevice wrapper ---
+embedded-hal = "1.0"
+embedded-hal-bus = "0.3"
+
+# riscv-rt is a `links` crate; pin to rp235x-hal's expected major.
+[target.'cfg(target_arch = "riscv32")'.dependencies]
+riscv = "0.12"
+riscv-rt = "0.12"
+
+[target.'cfg(target_arch = "arm")'.dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"

@@ -1,0 +1,20 @@
+# Workspace for the DSM Root Advance MACANDD offline-bearer anchor.
+#
+#   anchor-core  — hardware-free protocol core + host verifier (Rust, host-testable)
+#   firmware     — RP2350 (Pico 2 W) anchor firmware (Rust, rp235x-hal + official libtropic-rs)
+#
+# TROPIC01 is driven via the official `libtropic-rs` (`tropic01`) embedded-hal
+# driver — pure Rust, so the firmware cross-compiles via rustup alone (no C
+# toolchain / newlib / pico-sdk).
+#   cargo test  -p dsm-anchor-core
+#   cargo build -p dsm-anchor-firmware --target thumbv8m.main-none-eabihf   # ARM (default)
+#   cargo build -p dsm-anchor-firmware --target riscv32imac-unknown-none-elf # RISC-V
+[workspace]
+resolver = "2"
+members = ["anchor-core", "firmware"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = 2

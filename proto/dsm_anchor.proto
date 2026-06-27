@@ -1,0 +1,106 @@
+// DSM offline-bearer anchor — wire schema for the on-device appliance protocol.
+//
+// This is the shared contract between the RP2350 anchor firmware (which compiles
+// it with prost in no_std + alloc) and the DSM backend (which can compile it
+// alongside proto/dsm_app.proto). It is kept as a small standalone file rather
+// than added to the 4194-line dsm_app.proto so the firmware only links the anchor
+// messages, not the entire DSM schema.
+//
+// Conventions mirror dsm_app.proto: proto3, package under `dsm`, 32-byte BLAKE3
+// identifiers/hashes carried as `bytes`. Fixed lengths are NOT expressed via the
+// dsm_fixed_len custom option here (that would require the extension descriptor);
+// anchor-core validates every fixed-width field on decode instead.
+//
+// Authority model: Root Advance MACANDD (§2). The appliance certifies exactly
+// one root advance from the current DSM root and then moves the counter. The
+// receiver accepts on public DSM proofs + an authenticated TROPIC01 counter
+// read, never on RP2350 statements.
+
+syntax = "proto3";
+
+package dsm.anchor;
+
+// The DSM SMT root-advance package Δ (§8, Def. 14). It carries everything the
+// receiver needs to verify hᵢ → hᵢ₊₁ via ordinary DSM leaf proofs and to rebind
+// the witness. The anchor index uᵢ is committed by the parent root, so the only
+// valid successor index is uᵢ+1.
+message TransitionPackage {
+  bytes relationship_id       = 1;  // 32
+  bytes object_id             = 2;  // 32
+  bytes sender_device_id      = 3;  // 32
+  bytes recipient_device_id   = 4;  // 32
+  bytes parent_root           = 5;  // 32  hᵢ
+  bytes next_root             = 6;  // 32  hᵢ₊₁
+  uint64 parent_index         = 7;  //     uᵢ
+  uint64 next_index           = 8;  //     uᵢ+1
+  uint32 action_type          = 9;  // 0=Transfer 1=Resync 2=Cancel 3=Rotate
+  bytes action_fields         = 10; // canonical action-specific encoding
+  bytes payload_hash          = 11; // 32
+  bytes old_leaf_proof        = 12; // DSM SMT proof of the spent leaf at hᵢ
+  bytes new_leaf_proof        = 13; // DSM SMT proof of the produced leaf at hᵢ₊₁
+  bytes authority_policy_hash  = 14; // 32
+}
+
+// The root advance certificate (§10, Def. 21):
+// Cert = (hᵢ,hᵢ₊₁,uᵢ,uᵢ+1,D,X,P_hw,pk_hw,σ,anchor_id,q,r_R).
+message RootAdvanceCertificate {
+  bytes parent_root        = 1;  // 32  hᵢ
+  bytes next_root          = 2;  // 32  hᵢ₊₁
+  uint64 parent_index      = 3;  //     uᵢ
+  uint64 next_index        = 4;  //     uᵢ+1
+  bytes transition_digest  = 5;  // 32  D
+  bytes witness_input      = 6;  // 32  X
+  bytes pk_hash            = 7;  // 32  P_hw = H(tag‖pk_hw)
+  bytes pk_hw              = 8;  // revealed witness public key
+  bytes sigma              = 9;  // σ = StepSign(sk_hw, M)
+  bytes anchor_id          = 10; // 32  enrolled anchor identity
+  uint32 slot              = 11; //     MACANDD slot q (validated ≤ u16::MAX)
+  bytes receiver_challenge = 12; // 32  r_R
+}
+
+// TROPIC01 counter evidence (§11.3, Def. 10). The receiver obtains this directly
+// from the chip over an authenticated L3 verifier-pairing-slot session (the host
+// only relays encrypted packets). The receiver checks H = H0 − (uᵢ+1).
+message CounterEvidence {
+  bytes anchor_id            = 1;  // 32
+  uint64 enrolled_counter    = 2;  // H0
+  uint64 live_counter_claim  = 3;  // untrusted transport claim of H (§7, §22)
+  uint64 derived_index_claim = 4;  // untrusted transport claim of u = H0 − H
+  bytes verifier_transcript  = 5;  // authenticated L3 read — the only trusted value
+}
+
+// The exported release package Pkg = (Δ, Cert, counter evidence) (§10).
+message OfflineRelease {
+  TransitionPackage transition = 1;
+  RootAdvanceCertificate cert  = 2;
+  CounterEvidence counter      = 3;
+}
+
+// Appliance operation selector (§11).
+enum Op {
+  OP_UNSPECIFIED = 0;
+  OP_PREPARE     = 1;  // one MACANDD witness call; form Cert; durable prepared record
+  OP_COMMIT      = 2;  // sign M, move the counter, erase sk_hw
+  OP_EMIT        = 3;  // export the committed release (after counter commit)
+  OP_FINALIZE    = 4;  // advance the active root to hᵢ₊₁
+  OP_STATUS      = 5;  // read active root/index/status (no state change)
+  OP_CANCEL      = 6;  // discard a prepared (uncommitted) record, erase sk_hw
+}
+
+// A request from the (non-secure) host transport into the secure core.
+message ApplianceRequest {
+  Op op                        = 1;
+  TransitionPackage transition = 2;  // OP_PREPARE
+  bytes receiver_challenge     = 3;  // OP_PREPARE (32, r_R)
+}
+
+// The secure core's response.
+message ApplianceResponse {
+  Op op                  = 1;
+  bool ok                = 2;
+  uint32 error           = 3;  // ApplianceError/decode error code if !ok
+  OfflineRelease release = 4;  // OP_EMIT
+  bytes active_root      = 5;  // OP_FINALIZE: hᵢ₊₁; OP_STATUS: active root
+  uint64 active_index    = 6;  // OP_STATUS: active index uᵢ
+  uint32 status          = 7;  // OP_STATUS: 0=Ready 1=Prepared 2=Committed
+}
